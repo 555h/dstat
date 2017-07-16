@@ -93,6 +93,7 @@ class Options:
         self.output = False
         self.pidfile = False
         self.profile = ''
+        self.rediscover = False
 
         ### List of available plugins
         allplugins = listplugins()
@@ -118,7 +119,7 @@ class Options:
                 ['all', 'all-plugins', 'bits', 'bw', 'black-on-white', 'color',
                  'debug', 'filesystem', 'float', 'full', 'help', 'integer',
                  'list', 'mods', 'modules', 'nocolor', 'noheaders', 'noupdate',
-                 'output=', 'pidfile=', 'profile', 'version', 'vmstat'] + allplugins)
+                 'output=', 'pidfile=', 'profile', 'rediscover', 'version', 'vmstat'] + allplugins)
         except getopt.error, exc:
             print 'dstat: %s, try dstat -h for a list of all the options' % str(exc)
             sys.exit(1)
@@ -206,6 +207,8 @@ class Options:
                 self.pidfile = arg
             elif opt in ['--profile']:
                 self.profile = 'dstat_profile.log'
+            elif opt in ['--rediscover']:
+                self.rediscover = True
             elif opt in ['-h', '--help']:
                 self.usage()
                 self.help()
@@ -324,6 +327,7 @@ Dstat options:
   --noupdate               disable intermediate updates
   --output file            write CSV output to file
   --profile                show profiling statistics when exiting dstat
+  --rediscover             rediscover devices before outputting headers
 
 delay is the delay in seconds between each update (default: 1)
 count is the number of updates to display before exiting (default: unlimited)
@@ -331,6 +335,9 @@ count is the number of updates to display before exiting (default: unlimited)
 
 ### START STATS DEFINITIONS ###
 class dstat:
+    # List of plugin attributes that can be resolved (if they are callable)
+    initialized = False
+    _resolvable_plugin_attributes = ('discover', 'vars', 'name', 'nick')
     vars = None
     name = None
     nick = None
@@ -346,6 +353,15 @@ class dstat:
 #    set2 = {}
 
     def prepare(self):
+        if not self.initialized:
+            self.initialized = True
+            self.val = {}
+            self.set1 = {}
+            self.set2 = {}
+            self._backup_resolvable_attributes()
+        else:
+            self._restore_resolvable_attributes()
+
         if callable(self.discover):
             self.discover = self.discover()
         if callable(self.vars):
@@ -359,23 +375,37 @@ class dstat:
         if not self.nick:
             self.nick = self.vars
 
-        self.val = {}; self.set1 = {}; self.set2 = {}
         if self.struct: ### Plugin API version 2
             for name in self.vars + [ 'total', ]:
+                if name in self.val:
+                    continue
                 self.val[name] = self.struct
                 self.set1[name] = self.struct
                 self.set2[name] = {}
         elif self.cols <= 0: ### Plugin API version 1
             for name in self.vars:
+                if name in self.val:
+                    continue
                 self.val[name] = self.set1[name] = self.set2[name] = 0
         else: ### Plugin API version 1
             for name in self.vars + [ 'total', ]:
+                if name in self.val:
+                    continue
                 self.val[name] = range(self.cols)
                 self.set1[name] = range(self.cols)
                 self.set2[name] = range(self.cols)
                 for i in range(self.cols):
                     self.val[name][i] = self.set1[name][i] = self.set2[name][i] = 0
 #        print self.val
+
+    def _backup_resolvable_attributes(self):
+        self._resolvable_plugin_attributes_backups = {}
+        for attribute_name in self._resolvable_plugin_attributes:
+            self._resolvable_plugin_attributes_backups[attribute_name] = getattr(self, attribute_name)
+
+    def _restore_resolvable_attributes(self):
+        for attribute_name, attribute in self._resolvable_plugin_attributes_backups.iteritems():
+            setattr(self, attribute_name, attribute)
 
     def open(self, *filenames):
         "Open stat file descriptor"
@@ -1058,12 +1088,12 @@ class dstat_fs(dstat):
 
 class dstat_int(dstat):
     def __init__(self):
+        self._resolvable_plugin_attributes += ('intmap',)
         self.name = 'interrupts'
         self.type = 'd'
         self.width = 5
         self.scale = 1000
         self.open('/proc/stat')
-        self.intmap = self.intmap()
 
     def intmap(self):
         ret = {}
@@ -1094,6 +1124,7 @@ class dstat_int(dstat):
 #       return False
 
     def vars(self):
+        self.intmap = self.intmap()
         ret = []
         if op.intlist:
             varlist = op.intlist
@@ -2788,6 +2819,9 @@ def perform(update):
 
         ### Display header
         if showheader:
+            if op.rediscover:
+                for o in totlist:
+                    o.prepare()
             if loop == 0 and totlist != vislist:
                 print >>sys.stderr, 'Terminal width too small, trimming output.'
             showheader = False

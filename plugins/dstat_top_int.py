@@ -7,6 +7,7 @@ class dstat_plugin(dstat):
     Displays the name of the most frequent interrupt
     """
     def __init__(self):
+        self._resolvable_plugin_attributes += ('names',)
         self.name = 'most frequent'
         self.vars = ('interrupt',)
         self.type = 's'
@@ -14,7 +15,10 @@ class dstat_plugin(dstat):
         self.scale = 0
         self.intset1 = [ ]
         self.open('/proc/stat')
+
+    def discover(self, *objlist):
         self.names = self.names()
+        return True
 
     def names(self):
         ret = {}
